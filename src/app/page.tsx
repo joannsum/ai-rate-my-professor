@@ -47,6 +47,27 @@ export default function Home() {
       })
     })
   }
+
+  async function uploadReviews() {
+    try {
+      const response = await fetch("/api/uploadreview", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Error uploading reviews: ${response.status} ${errorText}`);
+      }
+
+      const result = await response.json();
+      console.log("Reviews uploaded successfully:", result);
+    } catch (error) {
+      console.error("Error:", error);
+    }
+  }
   
   return (
     <Box
@@ -57,6 +78,7 @@ export default function Home() {
       justifyContent="center"
       alignItems="center"
     >
+ 
       <Stack
         direction={'column'}
         width="500px"
@@ -65,6 +87,10 @@ export default function Home() {
         p={2}
         spacing={3}
       >
+
+  <Button variant="contained" onClick={uploadReviews}>
+          Upload Review
+        </Button>
         <Stack
           direction={'column'}
           spacing={2}
