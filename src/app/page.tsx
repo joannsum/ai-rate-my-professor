@@ -4,8 +4,8 @@ import { useState } from 'react';
 import { FaStar } from 'react-icons/fa';
 import ReactMarkdown from 'react-markdown';
 
-
 export default function Home() {
+
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -21,25 +21,34 @@ export default function Home() {
       { role: 'user', content: message },
       { role: 'assistant', content: '' },
     ]);
-  
-    const response = fetch('/api/chat', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        messages: [...messages, { role: 'user', content: message }]
-      }),
-    }).then(async (res) => {
-      const reader = res.body.getReader();
+
+    try {
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [...messages, { role: 'user', content: message }]
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+
+      if (response.body == null) {
+        throw new Error('Response body is null');
+      }
+
+      const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let result = '';
-  
-      return reader.read().then(function processText({ done, value }) {
-        if (done) {
-          return result;
-        }
-        const text = decoder.decode(value || new Uint8Array(), { stream: true });
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const text = decoder.decode(value, { stream: true });
         const contentOnly = JSON.parse(text).content.replace(/^Assistant: /, '').trim();
 
         setMessages((messages) => {
@@ -50,9 +59,18 @@ export default function Home() {
             { ...lastMessage, content: lastMessage.content + contentOnly },
           ];
         });
-        return reader.read().then(processText);
-      });
-    });
+
+        result += text;
+      }
+
+      return result;
+    } catch (error) {
+      console.error('Error in sendMessage:', error);
+      setMessages((messages) => [
+        ...messages,
+        { role: 'assistant', content: 'Sorry, an error occurred while processing your request.' },
+      ]);
+    }
   };
 
   // function to uploadReviews
