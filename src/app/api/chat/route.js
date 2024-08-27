@@ -1,131 +1,166 @@
-import { NextResponse } from 'next/server'
-import { Pinecone } from '@pinecone-database/pinecone'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { NextResponse } from 'next/server';
+import { createClient } from '@supabase/supabase-js';
+import { GoogleGenerativeAI, EmbeddingModel } from '@google/generative-ai';
 
-console.log('Environment Variables Check:');
-console.log('PINECONE_API_KEY exists:', !!process.env.PINECONE_API_KEY);
-console.log('PINECONE_ENVIRONMENT exists:', !!process.env.PINECONE_ENVIRONMENT);
-console.log('GOOGLE_API_KEY exists:', !!process.env.GOOGLE_API_KEY);
+console.log('Initializing Supabase client...');
+const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
-// if (process.env.PINECONE_API_KEY) {
-//     console.log('PINECONE_API_KEY (first 5 chars):', process.env.PINECONE_API_KEY.substring(0, 5));
-// }
-// if (process.env.PINECONE_ENVIRONMENT) {
-//     console.log('PINECONE_ENVIRONMENT:', process.env.PINECONE_ENVIRONMENT);
-// }
-// if (process.env.GOOGLE_API_KEY) {
-//     console.log('GOOGLE_API_KEY (first 5 chars):', process.env.GOOGLE_API_KEY.substring(0, 5));
-// }
+console.log('Initializing Google AI client...');
+const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY);
+const embeddingModel = genAI.getGenerativeModel({ model: "embedding-001" });
+const generativeModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
 
-const systemPrompt = `
-You are a rate my professor agent to help students find classes, that takes in user questions and answers them.
-For every user question, the top 3 professors that match the user question are returned.
-Use them to answer the question if needed.
-`
+async function generateEmbedding(text) {
+    console.log('Generating embedding for:', text);
+    try {
+      const result = await embeddingModel.embedContent(text);
+      console.log('Embedding generated successfully');
+      return result.embedding.values; // Return the actual embedding values
+    } catch (error) {
+      console.error('Error generating embedding:', error);
+      throw error;
+    }
+  }
+  
+    function extractKeywords(query) {
+    // List of common words to ignore
+    const stopWords = new Set([
+      'a', 'about', 'above', 'after', 'again', 'against', 'all', 'am', 'an', 'and', 'any', 'are', 'as', 'at', 'be', 'because', 'been', 'before', 'being', 'below', 'between', 'both', 'but', 'by', 'can', 'did', 'do', 'does', 'doing', 'down', 'during', 'each', 'few', 'for', 'from', 'further', 'had', 'has', 'have', 'having', 'he', 'her', 'here', 'hers', 'herself', 'him', 'himself', 'his', 'how', 'i', 'if', 'in', 'into', 'is', 'it', 'its', 'itself', 'me', 'more', 'most', 'my', 'myself', 'no', 'nor', 'not', 'of', 'off', 'on', 'once', 'only', 'or', 'other', 'ought', 'our', 'ours', 'ourselves', 'out', 'over', 'own', 'same', 'she', 'should', 'so', 'some', 'such', 'than', 'that', 'the', 'their', 'theirs', 'them', 'themselves', 'then', 'there', 'these', 'they', 'this', 'those', 'through', 'to', 'too', 'under', 'until', 'up', 'very', 'was', 'we', 'were', 'what', 'when', 'where', 'which', 'while', 'who', 'whom', 'why', 'with', 'would', 'you', 'your', 'yours', 'yourself', 'yourselves'
+    ]);
+  
+    // Split the query into words, convert to lowercase, and remove stop words
+    const words = query.toLowerCase().split(/\W+/).filter(word => !stopWords.has(word) && word.length > 1);
+  
+    // Join the words back together
+    return words.join(' ');
+  }
+  
+  async function searchSimilarProfessors(query, limit = 5) {
+    console.log('Original query:', query);
+    const extractedKeywords = extractKeywords(query);
+    console.log('Extracted keywords:', extractedKeywords);
+  
+    const embedding = await generateEmbedding(extractedKeywords);
+  
+    console.log('Generated embedding:', embedding.slice(0, 5) + '...'); // Log only first 5 values
+  
+    // Use improved Postgres similarity search
+    console.log('Calling match_professors with parameters:', {
+      query_text: extractedKeywords,
+      query_embedding: embedding.slice(0, 5) + '...',
+      match_threshold: 0.78,
+      match_count: limit
+    });
+  
+    const { data, error } = await supabase
+      .rpc('match_professors', {
+        query_text: extractedKeywords,
+        query_embedding: embedding,
+        match_threshold: 0.78,
+        match_count: limit
+      });
+  
+    if (error) {
+      console.error('Error in searchSimilarProfessors:', error);
+      console.error('Full error object:', JSON.stringify(error, null, 2));
+      return [];
+    }
+  
+    console.log('Similar professors found:', data ? data.length : 0);
+    if (data && data.length > 0) {
+      console.log('First professor data:', JSON.stringify(data[0], null, 2));
+    } else {
+      console.log('No professors found');
+    }
+    return data || [];
+  }
+
+async function insertReview(review) {
+  console.log('Inserting review:', review);
+  const embeddingText = `${review.professor} ${review.university} ${review.subject} ${review.review}`;
+  const embedding = await generateEmbedding(embeddingText);
+  
+  console.log('Inserting review into Supabase...');
+  const { data, error } = await supabase
+    .from('professor_reviews')
+    .insert({
+      ...review,
+      embedding: embedding,
+    })
+    .select();
+
+  if (error) {
+    console.error('Error inserting review:', error);
+    throw error;
+  }
+  console.log('Review inserted successfully:', data);
+  return data;
+}
 
 export async function POST(req) {
-    try {
-        console.log('Starting POST request')
-        const data = await req.json()
-        
-        if (!process.env.PINECONE_API_KEY || !process.env.GOOGLE_API_KEY) {
-            throw new Error('Missing required API keys')
-        }
+  console.log('POST request received');
+  try {
+    const body = await req.json();
+    console.log('Received body:', body);
 
-        console.log('Initializing Pinecone')
-        const pinecone = new Pinecone({
-            apiKey: process.env.PINECONE_API_KEY,
-        })
-
-        console.log('Getting Pinecone index')
-        const index = pinecone.index("rag")
-
-        console.log('Initializing Google AI')
-        const genAI = new GoogleGenerativeAI(process.env.GOOGLE_API_KEY)
-        const embedModel = genAI.getGenerativeModel({ model: "embedding-001" })
-        const chatModel = genAI.getGenerativeModel({ model: "gemini-pro" })
-
-        const text = data[data.length - 1].content
-        console.log('Processing text:', text)
-
-        console.log('Generating embedding')
-        const embedResult = await embedModel.embedContent(text)
-        const embedding = embedResult.embedding
-        if (!embedding) {
-            throw new Error('Failed to generate embedding')
-        }
-        console.log('Embedding generated, length:', embedding.length)
-
-        console.log('Querying Pinecone')
-
-        console.log('Embedding type:', typeof embedding)
-        console.log('Embedding length:', embedding.length)
-        // console.log('First few elements of embedding:', embedding.slice(0, 5))
-
-        const queryResponse = await index.query({
-            vector: embedding,
-            topK: 5,
-            includeMetadata: true
-        })
-        
-        console.log('Pinecone query results:', JSON.stringify(queryResponse))
-
-        console.log('Query response type:', typeof queryResponse)
-        console.log('Query response keys:', Object.keys(queryResponse))
-
-        let resultString = ''
-        if (queryResponse.matches && queryResponse.matches.length > 0) {
-            queryResponse.matches.forEach((match) => {
-                resultString += `
-                Returned Results:
-                Professor: ${match.id}
-                Review: ${match.metadata?.review || 'N/A'}
-                Subject: ${match.metadata?.subject || 'N/A'}
-                Stars: ${match.metadata?.stars || 'N/A'}
-                \n\n`
-            })
-        } else {
-            resultString = 'No relevant professor information found.'
-        }
-
-        const lastMessage = data[data.length - 1]
-        const lastMessageContent = lastMessage.content + resultString
-        const lastDataWithoutLastMessage = data.slice(0, data.length - 1)
-
-        console.log('Starting chat')
-        const chat = chatModel.startChat({
-            history: [
-                { role: "user", parts: systemPrompt },
-                ...lastDataWithoutLastMessage.map(msg => ({ role: msg.role, parts: msg.content })),
-            ],
-        })
-
-        console.log('Sending message stream')
-        const result = await chat.sendMessageStream(lastMessageContent)
-
-        const stream = new ReadableStream({
-            async start(controller) {
-                const encoder = new TextEncoder()
-                try {
-                    for await (const chunk of result.stream) {
-                        const text = encoder.encode(chunk.text())
-                        controller.enqueue(text)
-                    }
-                } catch (err) {
-                    console.error('Streaming error:', err)
-                    controller.error(err)
-                } finally {
-                    controller.close()
-                }
-            },
-        })
-        console.log('Returning stream response')
-        return new NextResponse(stream)
-    } catch (error) {
-        console.error('Error in POST request:', error)
-        return new NextResponse(JSON.stringify({ error: error.message }), {
-            status: 500,
-            headers: { 'Content-Type': 'application/json' }
-        })
+    if (body.action === 'insert_review') {
+      console.log('Inserting new review...');
+      const result = await insertReview(body.review);
+      return NextResponse.json({ success: true, data: result });
     }
+
+    if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
+      console.error('Invalid request body: messages array is missing or empty');
+      throw new Error('Invalid request body: messages array is missing or empty');
+    }
+
+    const lastUserMessage = body.messages[body.messages.length - 1].content;
+    console.log('Received user message:', lastUserMessage);
+
+    console.log('Searching for similar professors...');
+    const similarProfessors = await searchSimilarProfessors(lastUserMessage);
+
+    const professorContext = similarProfessors.map(prof =>
+      `Professor: ${prof.professor}\nUniversity: ${prof.university}\nSubject: ${prof.subject}\nReview: ${prof.review}\nStars: ${prof.stars}\nSimilarity: ${prof.similarity.toFixed(2)}`
+    ).join('\n\n');
+
+    const prompt = `
+      You are a rate my professor agent to help students find classes, that takes in user questions and answers them.
+      For every user question, the top 3 professors that match the user question are returned.
+      Use them to answer the question if needed.
+      Context about relevant professors:
+      ${professorContext}
+      If the user is asking about a specific professor or course and it's in the context, provide details about that professor and/or course. If it's not in the context, politely inform the user that you don't have information about that specific professor and/or course and offer to provide information about professors based on some other information about the course or professors.
+
+      Chat history:
+      ${body.messages.map(msg => `${msg.role}: ${msg.content}`).join('\n')}
+
+      Human: ${lastUserMessage}
+      Assistant: Based on the professors in the context and the user's question, here's my response:`;
+
+    console.log('Generating content with Google AI...');
+    const result = await generativeModel.generateContent(prompt);
+    const response = await result.response;
+    let text = response.text();
+    
+    // Remove "Assistant:" prefix if present
+    text = text.replace(/^Assistant:\s*/, '');
+    
+    // Trim whitespace
+    text = text.trim();
+
+    console.log('Generated response:', text);
+
+    // Return the response as JSON
+    return NextResponse.json({ content: text });
+  } catch (error) {
+    console.error('Error in API route:', error);
+    return NextResponse.json(
+      { error: 'An error occurred while processing your request: ' + error.message },
+      { status: 400 }
+    );
+  }
 }

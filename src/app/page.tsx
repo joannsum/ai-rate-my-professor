@@ -2,6 +2,8 @@
 import { Box, Button, Stack, TextField, Typography } from '@mui/material';
 import { useState } from 'react';
 import { FaStar } from 'react-icons/fa';
+import ReactMarkdown from 'react-markdown';
+
 
 export default function Home() {
   const [messages, setMessages] = useState([
@@ -19,29 +21,33 @@ export default function Home() {
       { role: 'user', content: message },
       { role: 'assistant', content: '' },
     ]);
-
+  
     const response = fetch('/api/chat', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify([...messages, { role: 'user', content: message }]),
+      body: JSON.stringify({
+        messages: [...messages, { role: 'user', content: message }]
+      }),
     }).then(async (res) => {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let result = '';
-
+  
       return reader.read().then(function processText({ done, value }) {
         if (done) {
           return result;
         }
         const text = decoder.decode(value || new Uint8Array(), { stream: true });
+        const contentOnly = JSON.parse(text).content.replace(/^Assistant: /, '').trim();
+
         setMessages((messages) => {
           let lastMessage = messages[messages.length - 1];
           let otherMessages = messages.slice(0, messages.length - 1);
           return [
             ...otherMessages,
-            { ...lastMessage, content: lastMessage.content + text },
+            { ...lastMessage, content: lastMessage.content + contentOnly },
           ];
         });
         return reader.read().then(processText);
@@ -167,7 +173,7 @@ export default function Home() {
                     borderRadius={16}
                     p={3}
                   >
-                    {message.content}
+                    <ReactMarkdown>{message.content}</ReactMarkdown>
                   </Box>
                 </Box>
               ))}
